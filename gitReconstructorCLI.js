@@ -11,46 +11,83 @@
  * 
  * Example:
  *   node gitReconstructorCLI.js adrian-commits.json
+ *   node gitReconstructorCLI.js adrian-commits.json --auto-approve
  */
 
 const fs = require('fs');
 const path = require('path');
 const { promisify } = require('util');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const { promisify: p } = require('util');
 
 const readFile = promisify(fs.readFile);
 const writeFile = promisify(fs.writeFile);
 const mkdir = promisify(fs.mkdir);
 const exists = promisify(fs.exists);
+const copyFile = promisify(fs.copyFile);
+const stat = promisify(fs.stat);
 const execAsync = p(exec);
 
 // NTFS FILETIME to Unix timestamp conversion
 const NTFS_EPOCH = new Date('1601-01-01T00:00:00.000Z');
 const UNIX_EPOCH = new Date('1970-01-01T00:00:00.000Z');
-const FILETIME_PER_SECOND = 10000000; // 100-nanosecond intervals per second
-const FILETIME_PER_MS = 10000; // 100-nanosecond intervals per millisecond
+const FILETIME_PER_SECOND = 10000000n; // 100-nanosecond intervals per second
+const FILETIME_PER_MS = 10000n; // 100-nanosecond intervals per millisecond
+const EPOCH_DIFF_MS = UNIX_EPOCH - NTFS_EPOCH;
 
 /**
  * Convert NTFS FILETIME to JavaScript Date
- * @param {string|number} filetime - NTFS FILETIME value
+ * @param {string|number|BigInt} filetime - NTFS FILETIME value
  * @returns {Date} - JavaScript Date object
  */
 function filetimeToDate(filetime) {
-    const filetimeNum = BigInt(filetime);
-    const epochDiffMs = UNIX_EPOCH - NTFS_EPOCH;
-    const unixTimestamp = Number(filetimeNum / FILETIME_PER_MS) - epochDiffMs;
-    return new Date(unixTimestamp);
+    // Ensure filetime is a string and convert to BigInt
+    const filetimeStr = String(filetime);
+    const filetimeBig = BigInt(filetimeStr);
+    
+    // NTFS EPOCH (1601-01-01) to UNIX EPOCH (1970-01-01) difference in 100-nanosecond intervals
+    const EPOCH_DIFF_FILETIME = 116444736000000000n; // 132824454400000000 for 1970-01-01
+    
+    // Convert FILETIME to Unix timestamp in milliseconds
+    // FILETIME: 100-nanosecond intervals since 1601-01-01
+    // Unix: milliseconds since 1970-01-01
+    const unixTimestampMs = Number((filetimeBig - EPOCH_DIFF_FILETIME) / 10000n);
+    return new Date(unixTimestampMs);
 }
 
 /**
- * Convert NTFS FILETIME to Unix timestamp for git
- * @param {string} filetime - NTFS FILETIME value  
- * @returns {number} - Unix timestamp in seconds (for git)
+ * Convert NTFS FILETIME to Unix timestamp for git (seconds since 1970)
+ * @param {string} filetime - NTFS FILETIME value
+ * @returns {string} - Unix timestamp in format for git
  */
-function filetimeToUnixTimestamp(filetime) {
+function filetimeToGitDate(filetime) {
     const date = filetimeToDate(filetime);
-    return Math.floor(date.getTime() / 1000);
+    // Format for git: "Mon DD YYYY HH:MM:SS +ZZZZ"
+    const pad = (n) => n.toString().padStart(2, '0');
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    
+    const year = date.getFullYear();
+    const month = months[date.getMonth()];
+    const day = pad(date.getDate());
+    const hours = pad(date.getHours());
+    const minutes = pad(date.getMinutes());
+    const seconds = pad(date.getSeconds());
+    
+    // Get timezone offset
+    const offset = date.getTimezoneOffset();
+    const offsetHours = Math.floor(Math.abs(offset) / 60).toString().padStart(2, '0');
+    const offsetMinutes = (Math.abs(offset) % 60).toString().padStart(2, '0');
+    const offsetSign = offset < 0 ? '+' : '-';
+    
+    return `${month} ${day} ${year} ${hours}:${minutes}:${seconds} ${offsetSign}${offsetHours}${offsetMinutes}`;
+}
+
+/**
+ * Escape path for Windows command line
+ */
+function escapePath(p) {
+    // Replace backslashes with forward slashes and quote the path
+    return `"${p.replace(/\\/g, '/')}"`;
 }
 
 /**
@@ -61,6 +98,7 @@ function parseArguments() {
     const options = {
         jsonPath: null,
         outputDir: null,
+        autoApprove: false,
         help: false
     };
     
@@ -70,6 +108,9 @@ function parseArguments() {
         
         if (arg === '--output' || arg === '-o') {
             options.outputDir = args[++i];
+            i++;
+        } else if (arg === '--auto-approve' || arg === '-a' || arg === '--all') {
+            options.autoApprove = true;
             i++;
         } else if (arg === '--help' || arg === '-h') {
             options.help = true;
@@ -106,23 +147,32 @@ Arguments:
   <reconstructed-json>   JSON file from gitReconstructor.js (e.g., adrian-commits.json)
 
 Options:
-  -o, --output <dir>    Output directory for the git repo (default: ./reconstructed-repo)
+  -a, --auto-approve     Auto-approve all files (for fast iteration)
+  -o, --output <dir>    Output directory for the git repo (default: ./reconstructed-repos)
   -h, --help            Show this help message
+
+Examples:
+  # Interactive mode
+  node gitReconstructorCLI.js adrian-commits.json
+
+  # Auto-approve all files (fast mode)
+  node gitReconstructorCLI.js adrian-commits.json --auto-approve
+
+  # Auto-approve to specific directory
+  node gitReconstructorCLI.js adrian-commits.json --auto-approve -o ./Adrian-reconstructed
 
 How it works:
   1. Loads the reconstructed commit history from JSON
   2. Shows files chronologically (oldest first)
-  3. For each file: Approve, Deny, or Quit
+  3. For each file: Approve, Deny, or Quit (or auto-approve all)
   4. After reviewing all files: Shows overview of approved files
   5. Choose: Commit to git repo or Edit selections
   6. If committed: Creates real git repo with files and their original dates
 
-Example:
-  node gitReconstructorCLI.js adrian-commits.json -o ./Adrian-reconstructed
-
 Git date injection:
   - Uses filetime (NTFS 100ns precision) to set original modification dates
   - Creates files with their exact timestamps from the reconstruction
+  - Files are grouped into commits based on timestamp proximity
 `);
 }
 
@@ -159,7 +209,6 @@ function displayFileInfo(file, index, total) {
     console.log(colors.blue + `Filename: ` + colors.white + `${file.filename}` + colors.reset);
     console.log(colors.blue + `Date: ` + colors.white + `${file.date}` + colors.reset);
     console.log(colors.blue + `Filetime: ` + colors.white + `${file.filetime}` + colors.reset);
-    console.log(colors.blue + `Nanoseconds: ` + colors.white + `${file.nanoseconds}` + colors.reset);
     if (file.isPrimary) {
         console.log(colors.green + `✓ Primary file` + colors.reset);
     }
@@ -388,7 +437,6 @@ async function createGitRepo(outputDir, repoName) {
  */
 async function addFileToGitRepo(gitRepoPath, file, sourceFilePath) {
     try {
-        const relativePath = path.relative(gitRepoPath, path.join(gitRepoPath, file.filename));
         const targetPath = path.join(gitRepoPath, file.filename);
         
         // Ensure directory structure exists
@@ -397,33 +445,29 @@ async function addFileToGitRepo(gitRepoPath, file, sourceFilePath) {
             await mkdir(dir, { recursive: true });
         }
         
-        // Copy the file from source
+        // Copy the file from source using Node.js built-in copyFile
         if (sourceFilePath && await exists(sourceFilePath)) {
-            await execAsync(`copy "${sourceFilePath}" "${targetPath}"`, { 
-                cwd: gitRepoPath,
-                shell: true 
-            });
+            await copyFile(sourceFilePath, targetPath);
         } else {
             // Create empty file if source doesn't exist
             await writeFile(targetPath, '');
         }
         
-        // Set the modification time to the original filetime
-        const timestamp = filetimeToUnixTimestamp(file.filetime);
+        // Set the modification time to the original filetime using Node.js
         const date = filetimeToDate(file.filetime);
         
-        // Use touch command to set both access and modification times
-        // On Windows, we can use PowerShell to set file dates
-        const touchCmd = `powershell -Command "(Get-Item '${targetPath}').LastWriteTime = '${date.toISOString().replace(/[:.]/g, '-')}'"`;
-        
         try {
-            await execAsync(touchCmd, { 
-                cwd: gitRepoPath,
-                shell: true 
-            });
-            console.log(colors.green + `✓ Set date for ${relativePath} to ${file.date}` + colors.reset);
+            // Use utimes to set modification time
+            await stat(targetPath); // Ensure file exists
+            const atime = date.getTime() / 1000;
+            const mtime = date.getTime() / 1000;
+            
+            // Use Windows-specific approach
+            const { utimesSync } = require('fs');
+            utimesSync(targetPath, atime, mtime);
+            console.log(colors.green + `✓ Set date for ${file.filename} to ${file.date}` + colors.reset);
         } catch (touchError) {
-            console.log(colors.yellow + `Warning: Could not set exact date for ${relativePath}: ${touchError.message}` + colors.reset);
+            console.log(colors.yellow + `Warning: Could not set exact date for ${file.filename}: ${touchError.message}` + colors.reset);
         }
         
         // Add file to git
@@ -442,21 +486,23 @@ async function addFileToGitRepo(gitRepoPath, file, sourceFilePath) {
 async function commitToGitRepo(gitRepoPath, commitDate, commitMessage) {
     try {
         // Set git author and committer dates
-        const timestamp = filetimeToUnixTimestamp(commitDate);
-        const dateStr = filetimeToDate(commitDate).toISOString();
+        const gitDate = filetimeToGitDate(commitDate);
         
         // Configure git user (use generic for reconstruction)
         await execAsync('git config user.name "GitReconstructor"', { cwd: gitRepoPath });
         await execAsync('git config user.email "reconstructor@example.com"', { cwd: gitRepoPath });
         
-        // Set the commit date
+        // Use GIT_AUTHOR_DATE and GIT_COMMITTER_DATE environment variables
         const env = {
             ...process.env,
-            GIT_AUTHOR_DATE: dateStr,
-            GIT_COMMITTER_DATE: dateStr
+            GIT_AUTHOR_DATE: gitDate,
+            GIT_COMMITTER_DATE: gitDate
         };
         
-        await execAsync(`git commit -m "${commitMessage}" --date="${dateStr}"`, { 
+        // Sanitize commit message for command line
+        const sanitizedMessage = commitMessage.replace(/"/g, '""');
+        
+        await execAsync(`git commit -m ${sanitizedMessage} --date="${gitDate}"`, { 
             cwd: gitRepoPath,
             env: env 
         });
@@ -466,6 +512,122 @@ async function commitToGitRepo(gitRepoPath, commitDate, commitMessage) {
     } catch (error) {
         console.error(colors.red + `Error committing to git: ${error.message}` + colors.reset);
         return false;
+    }
+}
+
+/**
+ * Auto-approve workflow (no interaction)
+ */
+async function mainAutoApprove(jsonPath, outputDir) {
+    try {
+        console.log(colors.blue + `Loading reconstructed data from ${jsonPath}...` + colors.reset);
+        const { files, metadata } = await loadReconstructedFiles(jsonPath);
+        
+        if (files.length === 0) {
+            console.log(colors.yellow + 'No files found in the reconstructed data.' + colors.reset);
+            return;
+        }
+        
+        displayHeader('GIT RECONSTRUCTION - AUTO-APPROVE MODE');
+        console.log(colors.blue + `Auto-approving all ${files.length} files from ${metadata.fileCount || 'unknown'} original files` + colors.reset);
+        
+        // Auto-approve all files
+        const approvedFiles = [...files];
+        
+        // Show overview
+        displayApprovedOverview(approvedFiles);
+        
+        // Proceed directly to commit
+        displayHeader('CREATING GIT REPOSITORY');
+        
+        // Determine output directory
+        const finalOutputDir = outputDir || './reconstructed-repos';
+        
+        // Create output directory if it doesn't exist
+        await mkdir(finalOutputDir, { recursive: true });
+        
+        // Use the same name as the original repo (from the JSON path)
+        const jsonBasename = path.basename(jsonPath, '.json');
+        const repoNameMatch = jsonBasename.match(/^(.+)-commits$|^(.+)-history$/);
+        const repoName = repoNameMatch ? (repoNameMatch[1] || repoNameMatch[2]) : 'reconstructed';
+        
+        console.log(colors.blue + `Creating git repo: ${repoName}` + colors.reset);
+        
+        // Create git repository
+        const gitRepoPath = await createGitRepo(finalOutputDir, repoName);
+        
+        // Group files by commit (based on filetime proximity)
+        const groupedFiles = [];
+        let currentGroup = [];
+        let lastTimestamp = null;
+        
+        // Sort approved files by date
+        approvedFiles.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        
+        for (const file of approvedFiles) {
+            const currentTimestamp = new Date(file.date).getTime();
+            
+            if (currentGroup.length === 0) {
+                currentGroup.push(file);
+                lastTimestamp = currentTimestamp;
+            } else if (currentTimestamp - lastTimestamp <= 60000) {
+                // Within 60 seconds, group in same commit
+                currentGroup.push(file);
+                lastTimestamp = currentTimestamp;
+            } else {
+                groupedFiles.push(currentGroup);
+                currentGroup = [file];
+                lastTimestamp = currentTimestamp;
+            }
+        }
+        
+        if (currentGroup.length > 0) {
+            groupedFiles.push(currentGroup);
+        }
+        
+        console.log(colors.blue + `Creating ${groupedFiles.length} commits...` + colors.reset);
+        
+        // Process each group as a commit
+        for (let i = 0; i < groupedFiles.length; i++) {
+            const group = groupedFiles[i];
+            const commitDate = group[0].date; // Use first file's date as commit date
+            const commitFiletime = group[0].filetime;
+            
+            console.log(colors.cyan + `\nCommit ${i + 1}/${groupedFiles.length}: ${commitDate}` + colors.reset);
+            
+            // Add all files in this group
+            for (const file of group) {
+                // Find the source file in the original repos directory
+                const sourcePath = path.resolve(path.join(process.cwd(), file.path));
+                const success = await addFileToGitRepo(gitRepoPath, file, sourcePath);
+                
+                if (success) {
+                    console.log(colors.green + `  ✓ Added: ${file.filename} (${file.date})` + colors.reset);
+                } else {
+                    console.log(colors.red + `  ✗ Failed: ${file.filename}` + colors.reset);
+                }
+            }
+            
+            // Commit this group
+            const commitMessage = `Reconstructed commit ${i + 1} - ${new Date(commitDate).toLocaleDateString()}`;
+            const success = await commitToGitRepo(gitRepoPath, commitFiletime, commitMessage);
+            
+            if (success) {
+                console.log(colors.green + `  ✓ Commit created: ${commitMessage}` + colors.reset);
+            } else {
+                console.log(colors.red + `  ✗ Commit failed` + colors.reset);
+            }
+        }
+        
+        console.log(colors.green + '\n✓ Git repository reconstruction complete!' + colors.reset);
+        console.log(colors.blue + `Repository location: ${gitRepoPath}` + colors.reset);
+        console.log(colors.blue + 'You can now explore the reconstructed git repository with:' + colors.reset);
+        console.log(colors.cyan + `  cd "${gitRepoPath}" && git log --oneline` + colors.reset);
+        console.log(colors.cyan + `  cd "${gitRepoPath}" && git show` + colors.reset);
+        
+    } catch (error) {
+        console.error(colors.red + `Error: ${error.message}` + colors.reset);
+        process.exit(1);
     }
 }
 
@@ -529,8 +691,7 @@ async function mainInteractive(jsonPath, outputDir) {
                 return;
                 
             case 'e':
-                console.log(colors.yellow + 'Edit mode not yet implemented. Use approve/deny process again.' + colors.reset);
-                // For now, just restart the process
+                console.log(colors.yellow + 'Edit mode: Restarting approval process...' + colors.reset);
                 await mainInteractive(jsonPath, outputDir);
                 return;
                 
@@ -555,7 +716,6 @@ async function mainInteractive(jsonPath, outputDir) {
                 const gitRepoPath = await createGitRepo(finalOutputDir, repoName);
                 
                 // Group files by commit (based on filetime proximity)
-                // Files with same or very close timestamps are grouped in one commit
                 const groupedFiles = [];
                 let currentGroup = [];
                 let lastTimestamp = null;
@@ -597,11 +757,13 @@ async function mainInteractive(jsonPath, outputDir) {
                     // Add all files in this group
                     for (const file of group) {
                         // Find the source file in the original repos directory
-                        const sourcePath = path.resolve(file.path);
+                        const sourcePath = path.resolve(path.join(process.cwd(), file.path));
                         const success = await addFileToGitRepo(gitRepoPath, file, sourcePath);
                         
                         if (success) {
                             console.log(colors.green + `  ✓ Added: ${file.filename} (${file.date})` + colors.reset);
+                        } else {
+                            console.log(colors.red + `  ✗ Failed: ${file.filename}` + colors.reset);
                         }
                     }
                     
@@ -650,8 +812,12 @@ async function main() {
             process.exit(1);
         }
         
-        // Start interactive workflow
-        await mainInteractive(options.jsonPath, options.outputDir);
+        // Choose workflow based on options
+        if (options.autoApprove) {
+            await mainAutoApprove(options.jsonPath, options.outputDir);
+        } else {
+            await mainInteractive(options.jsonPath, options.outputDir);
+        }
         
     } catch (error) {
         console.error(colors.red + `Error: ${error.message}` + colors.reset);
@@ -665,9 +831,10 @@ main();
 // Export functions for use as a module
 module.exports = {
     filetimeToDate,
-    filetimeToUnixTimestamp,
+    filetimeToGitDate,
     loadReconstructedFiles,
     createGitRepo,
     addFileToGitRepo,
-    commitToGitRepo
+    commitToGitRepo,
+    mainAutoApprove
 };
