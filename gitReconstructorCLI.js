@@ -499,18 +499,26 @@ async function commitToGitRepo(gitRepoPath, commitDate, commitMessage) {
             GIT_COMMITTER_DATE: gitDate
         };
         
-        // Sanitize commit message for command line
-        const sanitizedMessage = commitMessage.replace(/"/g, '""');
+        // Build commit command properly
+        // Use JSON.stringify to properly escape the message, then remove outer quotes
+        const escapedMessage = JSON.stringify(commitMessage).slice(1, -1);
         
-        await execAsync(`git commit -m ${sanitizedMessage} --date="${gitDate}"`, { 
+        // Build the git command as an array to avoid shell parsing issues
+        const commitCmd = ['git', 'commit', '-m', commitMessage, '--date=' + gitDate];
+        
+        await execAsync(commitCmd.join(' '), { 
             cwd: gitRepoPath,
-            env: env 
+            env: env,
+            shell: true
         });
         
         console.log(colors.green + `✓ Committed with date: ${commitDate}` + colors.reset);
         return true;
     } catch (error) {
         console.error(colors.red + `Error committing to git: ${error.message}` + colors.reset);
+        // Try to show what went wrong
+        if (error.stdout) console.error('Git output:', error.stdout);
+        if (error.stderr) console.error('Git error:', error.stderr);
         return false;
     }
 }
