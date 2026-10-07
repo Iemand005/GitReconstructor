@@ -493,20 +493,20 @@ async function commitToGitRepo(gitRepoPath, commitDate, commitMessage) {
         await execAsync('git config user.email "reconstructor@example.com"', { cwd: gitRepoPath });
         
         // Use GIT_AUTHOR_DATE and GIT_COMMITTER_DATE environment variables
+        // This is the proper way to set commit dates in git
         const env = {
             ...process.env,
             GIT_AUTHOR_DATE: gitDate,
             GIT_COMMITTER_DATE: gitDate
         };
         
-        // Build commit command properly
-        // Use JSON.stringify to properly escape the message, then remove outer quotes
-        const escapedMessage = JSON.stringify(commitMessage).slice(1, -1);
+        // Escape the commit message properly for command line
+        const escapedMessage = commitMessage.replace(/"/g, '\\"');
         
-        // Build the git command as an array to avoid shell parsing issues
-        const commitCmd = ['git', 'commit', '-m', commitMessage, '--date=' + gitDate];
+        // Use a simple approach: pass everything through shell with proper quoting
+        const commitCmd = `git commit -m "${escapedMessage}"`;
         
-        await execAsync(commitCmd.join(' '), { 
+        await execAsync(commitCmd, { 
             cwd: gitRepoPath,
             env: env,
             shell: true
