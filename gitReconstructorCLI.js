@@ -771,6 +771,9 @@ async function mainInteractive(jsonPath, outputDir) {
                 
                 console.log(colors.blue + `Creating git repo: ${repoName}` + colors.reset);
                 
+                // Determine source base directory from the files
+                const sourceBaseDir = getSourceBaseDirectory(approvedFiles);
+                
                 // Create git repository
                 const gitRepoPath = await createGitRepo(finalOutputDir, repoName);
                 
@@ -817,10 +820,11 @@ async function mainInteractive(jsonPath, outputDir) {
                     for (const file of group) {
                         // Find the source file in the original repos directory
                         const sourcePath = path.resolve(path.join(process.cwd(), file.path));
-                        const success = await addFileToGitRepo(gitRepoPath, file, sourcePath);
+                        const success = await addFileToGitRepo(gitRepoPath, file, sourcePath, sourceBaseDir);
                         
                         if (success) {
-                            console.log(colors.green + `  ✓ Added: ${file.filename} (${file.date})` + colors.reset);
+                            const relativePath = getRelativePath(file.path, sourceBaseDir);
+                            console.log(colors.green + `  ✓ Added: ${relativePath} (${file.date})` + colors.reset);
                         } else {
                             console.log(colors.red + `  ✗ Failed: ${file.filename}` + colors.reset);
                         }
