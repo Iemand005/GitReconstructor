@@ -76,10 +76,16 @@ function escapePath(p) {
  * Normalize filename to ensure variants are grouped together
  * This handles cases where gitReconstructor.js didn't properly group variants
  */
-function normalizeFilenameForGit(originalFilename, actualFilename) {
+function normalizeFilenameForGit(originalFilename, actualFilename, filePath) {
     // For Adrian's specific case, we need to handle backup file patterns
     const parsed = path.parse(actualFilename);
     let baseName = parsed.name;
+    
+    // Handle directory-based filename normalization
+    // If file is in a directory named "countdown", treat index.html as countdown.html
+    if (filePath && filePath.includes(path.sep + 'countdown' + path.sep) && actualFilename === 'index.html') {
+        return 'countdown.html';
+    }
     
     // Handle index variants - files like index.htmla, index.htmle should become index.html
     if (baseName.match(/^index/)) {  
@@ -300,7 +306,7 @@ async function createGitRepository(repoName, commits, files, outputDir, autoAppr
                 
                 // Use originalFilename for the target filename to get proper file history
                 // Flatten directory structure - put all files in root of repo
-                let targetFilename = normalizeFilenameForGit(file.originalFilename || file.filename, file.filename);
+                let targetFilename = normalizeFilenameForGit(file.originalFilename || file.filename, file.filename, file.path);
                 const targetPath = path.join(gitRepoPath, targetFilename);
                 
                 // Copy the file
