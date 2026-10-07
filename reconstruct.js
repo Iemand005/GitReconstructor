@@ -293,16 +293,7 @@ async function createGitRepository(repoName, commits, files, outputDir, autoAppr
                 
                 // Use originalFilename for the target filename to get proper file history
                 // Flatten directory structure - put all files in root of repo
-                let targetFilename = file.originalFilename || file.filename;
-                
-                // Additional normalization for known variant patterns
-                // This ensures that files like index.htmla, index.htmle, indexta.html all become index.html
-                targetFilename = normalizeFilenameForGit(targetFilename, file.filename);
-                
-                // Log the normalization for debugging
-                if (targetFilename !== (file.originalFilename || file.filename)) {
-                    logInfo(`Normalized: ${file.originalFilename || file.filename} -> ${targetFilename}`);
-                }
+                let targetFilename = normalizeFilenameForGit(file.originalFilename || file.filename, file.filename);
                 const targetPath = path.join(gitRepoPath, targetFilename);
                 
                 // Copy the file
