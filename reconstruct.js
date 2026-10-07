@@ -73,6 +73,46 @@ function escapePath(p) {
 }
 
 /**
+ * Load blacklist from JSON file
+ */
+async function loadBlacklist() {
+    const blacklistPath = path.join(process.cwd(), 'blacklist.json');
+    try {
+        const data = await fs.promises.readFile(blacklistPath, 'utf8');
+        return JSON.parse(data);
+    } catch (error) {
+        // If blacklist doesn't exist, return empty array
+        return [];
+    }
+}
+
+/**
+ * Apply censorship to file content by replacing blacklisted strings
+ */
+function applyCensorship(content, blacklist) {
+    if (!blacklist || !Array.isArray(blacklist) || blacklist.length === 0) {
+        return content;
+    }
+    
+    let result = content;
+    for (const blacklistedString of blacklist) {
+        if (typeof blacklistedString === 'string' && blacklistedString.length > 0) {
+            // Replace with a censored version - use asterisks of the same length
+            const replacement = '*'.repeat(blacklistedString.length);
+            result = result.replace(new RegExp(escapeRegExp(blacklistedString), 'g'), replacement);
+        }
+    }
+    return result;
+}
+
+/**
+ * Escape special regex characters
+ */
+function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * Normalize filename to ensure variants are grouped together
  * This handles cases where gitReconstructor.js didn't properly group variants
  */
@@ -275,6 +315,10 @@ async function loadReconstructedData(jsonPath) {
  */
 async function createGitRepository(repoName, commits, files, outputDir, autoApprove = false) {
     const gitRepoPath = path.join(outputDir, repoName);
+    
+    // Load blacklist for censorship
+    const blacklist = await loadBlacklist();
+    logInfo(`Loaded ${blacklist.length} blacklisted strings`);
     
     // Create output directory
     await mkdir(gitRepoPath, { recursive: true });
