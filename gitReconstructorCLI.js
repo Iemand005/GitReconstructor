@@ -667,6 +667,10 @@ async function mainAutoApprove(jsonPath, outputDir) {
                 }
             }
             
+            // Stage all files for this commit
+            console.log(colors.blue + '  Staging files for commit...' + colors.reset);
+            await execAsync('git add -A', { cwd: gitRepoPath });
+            
             // Commit this group
             const commitMessage = `Reconstructed commit ${i + 1} - ${new Date(commitDate).toLocaleDateString()}`;
             const success = await commitToGitRepo(gitRepoPath, commitFiletime, commitMessage);
