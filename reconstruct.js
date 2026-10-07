@@ -77,16 +77,18 @@ function escapePath(p) {
  * This handles cases where gitReconstructor.js didn't properly group variants
  */
 function normalizeFilenameForGit(originalFilename, actualFilename) {
-    // Always normalize based on the actual filename to ensure consistency
-    const baseName = path.parse(actualFilename).name;
-    const ext = path.parse(actualFilename).ext;
+    // For Adrian's specific case, we need to handle backup file patterns
+    const parsed = path.parse(actualFilename);
+    let baseName = parsed.name;
     
-    // Special cases for Adrian's files - match any index variant
-    if (baseName.match(/^index/)) {  // Anything starting with "index"
-        return 'index' + ext; 
+    // Handle index variants - files like index.htmla, index.htmle should become index.html
+    if (baseName.match(/^index/)) {  
+        // For index files, always use .html extension
+        return 'index.html'; 
     }
-    if (baseName.match(/^Birthday Counter\s*\d*$/i)) {
-        return 'Birthday Counter' + ext; // Birthday Counter 2.html -> Birthday Counter.html
+    if (baseName.match(/^Birthday Counter/)) {
+        // Normalize Birthday Counter files
+        return 'Birthday Counter.html';
     }
     
     // Default to original filename
