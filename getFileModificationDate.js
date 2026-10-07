@@ -76,7 +76,7 @@ async function getDirectoryModDates(dirPath, recursive = false) {
 
 /**
  * Get modification dates for multiple files using glob patterns
- * @param {string} pattern - Glob pattern (e.g., "*.js", "src/**/*.ts")
+ * @param {string} pattern
  * @returns {Promise<Array<{path: string, modified: Date, size?: number}>>}
  */
 async function getFilesByPattern(pattern) {

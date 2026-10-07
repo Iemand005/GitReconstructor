@@ -22,9 +22,10 @@
   "author": "Lasse",
   "license": "MIT",
   "dependencies": {
-    "glob": "^10.3.10"
+    "diff": "^9.0.0",
+    "glob": "^10.3.10",
+    "string-similarity": "^4.0.4"
   },
-  "devDependencies": {},
   "engines": {
     "node": ">=14.0.0"
   }
