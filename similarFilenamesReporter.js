@@ -293,7 +293,16 @@ function parseArguments() {
         const arg = args[i];
         
         if (arg === '--threshold' || arg === '-t') {
-            options.threshold = parseFloat(args[++i]);
+            const thresholdArg = args[++i];
+            options.threshold = parseFloat(thresholdArg);
+            if (isNaN(options.threshold) || options.threshold < 0 || options.threshold > 1) {
+                console.error('Error: Threshold must be a number between 0 and 1');
+                process.exit(1);
+            }
+            i++;
+        } else if (arg.startsWith('--threshold=')) {
+            const thresholdValue = arg.split('=')[1];
+            options.threshold = parseFloat(thresholdValue);
             if (isNaN(options.threshold) || options.threshold < 0 || options.threshold > 1) {
                 console.error('Error: Threshold must be a number between 0 and 1');
                 process.exit(1);
