@@ -73,6 +73,35 @@ function escapePath(p) {
 }
 
 /**
+ * Normalize filename to ensure variants are grouped together
+ * This handles cases where gitReconstructor.js didn't properly group variants
+ */
+function normalizeFilenameForGit(originalFilename, actualFilename) {
+    // If the original filename is already clean, use it
+    if (originalFilename && !actualFilename.match(/[ea]html$|t$|wow$|Donedenkik$|compat$/i)) {
+        return originalFilename;
+    }
+    
+    // Handle index variants
+    const baseName = path.parse(actualFilename).name;
+    const ext = path.parse(actualFilename).ext;
+    
+    // Special cases for Adrian's files
+    if (baseName.match(/^index[ea]?$/i)) {
+        return 'index' + ext; // index.html, index.htmla -> index.html, index.htmle -> index.html
+    }
+    if (baseName.match(/^index(wow|Donedenkik|compat)$/i)) {
+        return 'index' + ext; // indexwow.html, indexDonedenkik.html -> index.html
+    }
+    if (baseName.match(/^Birthday Counter\s*\d*$/i)) {
+        return 'Birthday Counter' + ext; // Birthday Counter 2.html -> Birthday Counter.html
+    }
+    
+    // Default to original filename
+    return originalFilename || actualFilename;
+}
+
+/**
  * Ask user to select from options
  */
 async function selectOption(question, options) {
@@ -272,7 +301,11 @@ async function createGitRepository(repoName, commits, files, outputDir, autoAppr
                 
                 // Use originalFilename for the target filename to get proper file history
                 // Flatten directory structure - put all files in root of repo
-                const targetFilename = file.originalFilename || file.filename;
+                let targetFilename = file.originalFilename || file.filename;
+                
+                // Additional normalization for known variant patterns
+                // This ensures that files like index.htmla, index.htmle, indexta.html all become index.html
+                targetFilename = normalizeFilenameForGit(targetFilename, file.filename);
                 const targetPath = path.join(gitRepoPath, targetFilename);
                 
                 // Copy the file
