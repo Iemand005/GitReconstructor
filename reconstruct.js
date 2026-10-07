@@ -3,22 +3,26 @@
 /**
  * GitReconstructor - Main Entry Point
  * 
- * Unified interface for reconstructing git repositories from file backups/copies.
+ * Simple unified interface for reconstructing git repositories from file backups.
  * 
  * Usage:
- *   node reconstruct.js
- *   node reconstruct.js <repo-name> [--auto-approve]
+ *   node reconstruct.js                    # Interactive mode
+ *   node reconstruct.js <repo-name>       # Specific repo, asks auto/manual
+ *   node reconstruct.js <repo-name> -a    # Auto-approve mode
  */
 
 const fs = require('fs');
 const path = require('path');
 const { promisify } = require('util');
+const { exec } = require('child_process');
+const readline = require('readline');
 
 const readdir = promisify(fs.readdir);
 const stat = promisify(fs.stat);
-const exec = require('child_process').exec;
-const { promisify: p } = require('util');
-const execAsync = p(exec);
+const execAsync = promisify(exec);
+const copyFile = promisify(fs.copyFile);
+const mkdir = promisify(fs.mkdir);
+const writeFile = promisify(fs.writeFile);
 
 // ANSI colors
 const colors = {
@@ -27,278 +31,139 @@ const colors = {
     green: '\x1b[32m', 
     yellow: '\x1b[33m',
     blue: '\x1b[34m',
-    magenta: '\x1b[35m',
     cyan: '\x1b[36m',
-    white: '\x1b[37m',
-    bold: '\x1b[1m',
-    dim: '\x1b[2m'
+    bold: '\x1b[1m'
 };
 
-/**
- * Display a header
- */
-function displayHeader(title) {
+function logHeader(title) {
     console.log(colors.cyan + '\n' + '='.repeat(60));
     console.log(title.padStart(30 + Math.floor(30/2)));
     console.log('='.repeat(60) + colors.reset);
 }
 
+function logInfo(msg) { console.log(colors.blue + msg + colors.reset); }
+function logSuccess(msg) { console.log(colors.green + '✓ ' + msg + colors.reset); }
+function logError(msg) { console.log(colors.red + '✗ ' + msg + colors.reset); }
+function logWarn(msg) { console.log(colors.yellow + '⚠ ' + msg + colors.reset); }
+
 /**
- * List available repositories in the Repos directory
+ * List available repositories in Repos directory
  */
-async function listAvailableRepos() {
+async function listRepos() {
     const reposDir = path.join(process.cwd(), 'Repos');
     
     try {
-        const exists = await fs.promises.access(reposDir).then(() => true).catch(() => false);
-        if (!exists) {
-            console.log(colors.yellow + 'No Repos directory found.' + colors.reset);
-            return [];
-        }
-        
         const items = await readdir(reposDir);
-        const repos = [];
-        
-        for (const item of items) {
-            const fullPath = path.join(reposDir, item);
-            const itemStat = await stat(fullPath);
-            
-            if (itemStat.isDirectory() && !item.startsWith('.')) {
-                repos.push(item);
-            }
-        }
-        
-        return repos;
+        return items.filter(item => 
+            !item.startsWith('.') && 
+            fs.statSync(path.join(reposDir, item)).isDirectory()
+        );
     } catch (error) {
-        console.log(colors.yellow + `Warning: Could not read Repos directory: ${error.message}` + colors.reset);
+        logWarn(`No Repos directory found: ${error.message}`);
         return [];
     }
 }
 
 /**
- * Ask user to select from a list of options
+ * Escape a path for shell commands (handle spaces)
  */
-async function selectFromList(question, options, allowCustom = false) {
+function escapePath(p) {
+    // Double quotes for Windows cmd
+    return `"${p}"`;
+}
+
+/**
+ * Ask user to select from options
+ */
+async function selectOption(question, options) {
     return new Promise((resolve) => {
-        console.log(colors.bold + `\n${question}` + colors.reset);
+        console.log(colors.bold + '\n' + question + colors.reset);
+        options.forEach((opt, i) => console.log(`  ${i + 1}. ${opt}`));
+        console.log(`  q. Quit`);
         
-        options.forEach((option, index) => {
-            console.log(colors.white + `  ${index + 1}. ${option}` + colors.reset);
-        });
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const cleanup = () => rl.close();
         
-        if (allowCustom) {
-            console.log(colors.white + `  0. Enter custom directory` + colors.reset);
-        }
-        
-        console.log(colors.white + `  q. Quit` + colors.reset);
-        
-        const readline = require('readline');
-        const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout
-        });
-        
-        const listener = (input) => {
-            rl.close();
-            
-            const trimmed = input.trim().toLowerCase();
-            
-            if (trimmed === 'q') {
-                resolve(null);
-                return;
-            }
-            
-            if (trimmed === '0' && allowCustom) {
-                resolve('CUSTOM');
-                return;
-            }
-            
-            const index = parseInt(trimmed) - 1;
-            if (index >= 0 && index < options.length) {
-                resolve(options[index]);
-                return;
-            }
-            
-            // Default to first option
-            resolve(options[0]);
-        };
-        
-        rl.on('line', listener);
-        
-        const cleanup = () => {
-            rl.off('line', listener);
-        };
-        
-        const originalResolve = resolve;
-        resolve = (value) => {
+        rl.on('line', (input) => {
             cleanup();
-            originalResolve(value);
-        };
+            const trimmed = input.trim().toLowerCase();
+            if (trimmed === 'q') resolve(null);
+            else {
+                const index = parseInt(trimmed) - 1;
+                resolve(index >= 0 && index < options.length ? options[index] : options[0]);
+            }
+        });
     });
 }
 
 /**
- * Ask yes/no question
+ * Ask yes/no
  */
 async function askYesNo(question) {
     return new Promise((resolve) => {
-        console.log(colors.bold + `\n${question} ` + colors.reset + `[Y/n]`);
+        console.log(colors.bold + '\n' + question + ' ' + colors.reset + '[Y/n]');
         
-        const readline = require('readline');
-        const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout
-        });
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+        const cleanup = () => rl.close();
         
-        const listener = (input) => {
-            rl.close();
-            const trimmed = input.trim().toLowerCase();
-            resolve(trimmed === 'y' || trimmed === 'yes' || trimmed === '');
-        };
-        
-        rl.on('line', listener);
-        
-        const cleanup = () => {
-            rl.off('line', listener);
-        };
-        
-        const originalResolve = resolve;
-        resolve = (value) => {
+        rl.on('line', (input) => {
             cleanup();
-            originalResolve(value);
-        };
+            const trimmed = input.trim().toLowerCase();
+            resolve(trimmed === '' || trimmed === 'y' || trimmed === 'yes');
+        });
     });
 }
 
 /**
- * Check if the reconstruction JSON already exists
+ * NTFS FILETIME to Date conversion
  */
-async function checkReconstructionExists(repoName, format = 'commits') {
-    const jsonPath = path.join(process.cwd(), `${repoName}-${format}.json`);
-    try {
-        await fs.promises.access(jsonPath);
-        return jsonPath;
-    } catch (error) {
-        return null;
-    }
+function filetimeToDate(filetime) {
+    const EPOCH_DIFF_FILETIME = 116444736000000000n; // 1601-01-01 to 1970-01-01 in 100ns intervals
+    const filetimeBig = BigInt(filetime);
+    const unixTimestampMs = Number((filetimeBig - EPOCH_DIFF_FILETIME) / 10000n);
+    return new Date(unixTimestampMs);
 }
 
 /**
- * Run the reconstruction process
+ * Convert date to git timestamp format
  */
-async function runReconstruction(repoName, autoApprove, outputDir) {
-    const sourceDir = path.join(process.cwd(), 'Repos', repoName);
+function dateToGitTimestamp(date) {
+    const pad = n => n.toString().padStart(2, '0');
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     
-    // Step 1: Create reconstruction JSON if it doesn't exist
-    const historyJsonPath = path.join(process.cwd(), `${repoName}-history.json`);
-    const commitsJsonPath = path.join(process.cwd(), `${repoName}-commits.json`);
+    const year = date.getFullYear();
+    const month = months[date.getMonth()];
+    const day = pad(date.getDate());
+    const hours = pad(date.getHours());
+    const minutes = pad(date.getMinutes());
+    const seconds = pad(date.getSeconds());
     
-    let jsonPath = await checkReconstructionExists(repoName, 'commits');
-    if (!jsonPath) {
-        jsonPath = await checkReconstructionExists(repoName, 'history');
-    }
+    const offset = date.getTimezoneOffset();
+    const offsetHours = Math.floor(Math.abs(offset) / 60).toString().padStart(2, '0');
+    const offsetMinutes = (Math.abs(offset) % 60).toString().padStart(2, '0');
+    const offsetSign = offset < 0 ? '+' : '-';
     
-    if (!jsonPath) {
-        console.log(colors.blue + `\nStep 1: Creating reconstruction JSON...` + colors.reset);
-        console.log(colors.blue + `Scanning: ${sourceDir}` + colors.reset);
-        
-        // Run gitReconstructor to create the JSON
-        const { spawn } = require('child_process');
-        const reconstructor = spawn('node', ['gitReconstructor.js', sourceDir, commitsJsonPath, '-f', 'git']);
-        
-        reconstructor.stdout.on('data', (data) => {
-            process.stdout.write(data);
-        });
-        
-        reconstructor.stderr.on('data', (data) => {
-            process.stderr.write(data);
-        });
-        
-        await new Promise((resolve, reject) => {
-            reconstructor.on('close', (code) => {
-                if (code === 0) {
-                    console.log(colors.green + `✓ Reconstruction JSON created: ${commitsJsonPath}` + colors.reset);
-                    resolve();
-                } else {
-                    reject(new Error('Reconstruction failed'));
-                }
-            });
-        });
-        
-        jsonPath = commitsJsonPath;
-    } else {
-        console.log(colors.green + `✓ Using existing reconstruction: ${jsonPath}` + colors.reset);
-    }
-    
-    // Step 2: Create git repository
-    console.log(colors.blue + `\nStep 2: Creating git repository...` + colors.reset);
-    
-    const cliArgs = ['gitReconstructorCLI.js', jsonPath, '-o', outputDir];
-    if (autoApprove) {
-        cliArgs.push('--auto-approve');
-    }
-    
-    const { spawn } = require('child_process');
-    const cli = spawn('node', cliArgs);
-    
-    cli.stdout.on('data', (data) => {
-        process.stdout.write(data);
-    });
-    
-    cli.stderr.on('data', (data) => {
-        process.stderr.write(data);
-    });
-    
-    await new Promise((resolve, reject) => {
-        cli.on('close', (code) => {
-            if (code === 0) {
-                console.log(colors.green + `\n✓ Git repository created successfully!` + colors.reset);
-                resolve();
-            } else {
-                reject(new Error('Git reconstruction failed'));
-            }
-        });
-    });
+    return `${month} ${day} ${year} ${hours}:${minutes}:${seconds} ${offsetSign}${offsetHours}${offsetMinutes}`;
 }
 
 /**
  * Parse command line arguments
  */
-function parseArguments() {
+function parseArgs() {
     const args = process.argv.slice(2);
-    const options = {
-        repo: null,
-        autoApprove: false,
-        outputDir: null,
-        help: false
-    };
+    const options = { repo: null, autoApprove: false, outputDir: './reconstructed-repos', help: false };
     
     let i = 0;
     while (i < args.length) {
         const arg = args[i];
-        
-        if (arg === '--auto-approve' || arg === '-a') {
-            options.autoApprove = true;
-            i++;
-        } else if (arg === '--output' || arg === '-o') {
-            options.outputDir = args[++i];
-            i++;
-        } else if (arg === '--help' || arg === '-h') {
-            options.help = true;
-        } else if (arg.startsWith('--')) {
-            console.error(`Unknown option: ${arg}`);
-            process.exit(1);
-        } else {
-            if (options.repo === null) {
-                options.repo = arg;
-            } else {
-                console.error(`Unexpected argument: ${arg}`);
-                process.exit(1);
-            }
-            i++;
-        }
+        if (arg === '--auto-approve' || arg === '-a') options.autoApprove = true;
+        else if (arg === '--output' || arg === '-o') options.outputDir = args[++i];
+        else if (arg === '--help' || arg === '-h') options.help = true;
+        else if (arg.startsWith('--')) { console.error(`Unknown option: ${arg}`); process.exit(1); }
+        else if (options.repo === null) options.repo = arg;
+        else { console.error(`Unexpected argument: ${arg}`); process.exit(1); }
+        i++;
     }
-    
     return options;
 }
 
@@ -311,130 +176,285 @@ GitReconstructor - Reconstruct Git Repositories from File Backups
 
 Usage:
   node reconstruct.js                    # Interactive mode
-  node reconstruct.js <repo-name>       # Select specific repository
+  node reconstruct.js <repo-name>       # Specific repo
   node reconstruct.js <repo> -a         # Auto-approve all files
 
 Options:
   <repo-name>          Name of repository in Repos/ directory
-  -a, --auto-approve   Auto-approve all files (skip manual review)
-  -o, --output <dir>    Output directory for git repo (default: ./reconstructed-repos)
+  -a, --auto-approve   Auto-approve all files (fast mode)
+  -o, --output <dir>    Output directory (default: ./reconstructed-repos)
   -h, --help           Show this help message
 
-Examples:
-  # Interactive selection and manual approval
-  node reconstruct.js
-
-  # Specific repo with manual approval
-  node reconstruct.js Adrian
-
-  # Auto-approve all files for fast reconstruction
-  node reconstruct.js Adrian --auto-approve
-
-  # With custom output directory
-  node reconstruct.js Adrian -a -o ./my-reconstructed-repos
-
 Workflow:
-  1. Select a repository from the Repos/ directory
-  2. Choose approval mode (auto or manual)
-  3. Review and approve files (if manual)
-  4. Create git repository with original dates preserved
-
-Note:
-  - Files with similar names (index.htmla, index.htmle, etc.) are grouped together
-  - NTFS 100-nanosecond timestamps are preserved
-  - Original directory structure is maintained
+  1. Select repository from Repos/ directory
+  2. Choose auto-approve or manual review
+  3. Create reconstruction JSON if needed
+  4. Build git repository with preserved dates
 `);
 }
 
 /**
- * Main function
+ * Create reconstruction JSON
+ */
+async function createReconstructionJson(repoName) {
+    const sourceDir = path.join(process.cwd(), 'Repos', repoName);
+    const outputJson = path.join(process.cwd(), `${repoName}-commits.json`);
+    
+    logInfo(`Creating reconstruction JSON for ${repoName}...`);
+    
+    const { spawn } = require('child_process');
+    const reconstructor = spawn('node', ['gitReconstructor.js', sourceDir, outputJson, '-f', 'git']);
+    
+    reconstructor.stdout.on('data', (data) => process.stdout.write(data));
+    reconstructor.stderr.on('data', (data) => process.stderr.write(data));
+    
+    await new Promise((resolve, reject) => {
+        reconstructor.on('close', (code) => {
+            if (code === 0) {
+                logSuccess(`Reconstruction JSON created: ${outputJson}`);
+                resolve();
+            } else {
+                reject(new Error('Reconstruction failed'));
+            }
+        });
+    });
+    
+    return outputJson;
+}
+
+/**
+ * Load reconstructed data
+ */
+async function loadReconstructedData(jsonPath) {
+    const data = JSON.parse(await fs.promises.readFile(jsonPath, 'utf8'));
+    
+    // Flatten commits into files array
+    const files = [];
+    for (const commit of data.commits || []) {
+        for (const file of commit.files || []) {
+            files.push(file);
+        }
+    }
+    
+    // Sort by date (oldest first)
+    files.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    
+    return { files, metadata: data.metadata || {} };
+}
+
+/**
+ * Create git repository and add files
+ */
+async function createGitRepository(repoName, files, outputDir, autoApprove = false) {
+    const gitRepoPath = path.join(outputDir, repoName);
+    
+    // Create output directory
+    await mkdir(gitRepoPath, { recursive: true });
+    
+    // Initialize git repo
+    await execAsync('git init', { cwd: gitRepoPath });
+    await execAsync('git config user.name "GitReconstructor"', { cwd: gitRepoPath });
+    await execAsync('git config user.email "reconstructor@example.com"', { cwd: gitRepoPath });
+    logSuccess(`Git repository initialized at: ${gitRepoPath}`);
+    
+    // Determine source base directory
+    const firstPath = files[0]?.path;
+    let sourceBaseDir = '';
+    if (firstPath) {
+        // Extract the Repos/Adrian part from Repos\Adrian\...
+        const parts = firstPath.split(path.sep);
+        sourceBaseDir = path.join(parts[0], parts[1]); // e.g., "Repos/Adrian"
+    }
+    
+    // Process files - group by timestamp proximity (60 seconds = same commit)
+    const groupedFiles = [];
+    let currentGroup = [];
+    let lastTimestamp = null;
+    
+    for (const file of files) {
+        const currentTimestamp = new Date(file.date).getTime();
+        
+        if (currentGroup.length === 0) {
+            currentGroup.push(file);
+            lastTimestamp = currentTimestamp;
+        } else if (currentTimestamp - lastTimestamp <= 60000) {
+            currentGroup.push(file);
+            lastTimestamp = currentTimestamp;
+        } else {
+            groupedFiles.push(currentGroup);
+            currentGroup = [file];
+            lastTimestamp = currentTimestamp;
+        }
+    }
+    if (currentGroup.length > 0) groupedFiles.push(currentGroup);
+    
+    logInfo(`Creating ${groupedFiles.length} commits...`);
+    
+    // Process each commit
+    for (let commitIndex = 0; commitIndex < groupedFiles.length; commitIndex++) {
+        const group = groupedFiles[commitIndex];
+        const commitDate = group[0].date;
+        const commitFiletime = group[0].filetime;
+        
+        // Add all files in this commit
+        for (const file of group) {
+            try {
+                // Resolve source path - replace backslashes and make absolute
+                const normalizedPath = file.path.replace(/\\/g, path.sep);
+                const fullSourcePath = path.resolve(process.cwd(), normalizedPath);
+                
+                // Determine relative path in git repo (preserve structure from source)
+                let relativePath = path.relative(sourceBaseDir, normalizedPath);
+                
+                // Clean up relative path
+                relativePath = relativePath.replace(/\\/g, '/'); // Use forward slashes for git
+                
+                // Target path in git repo
+                const targetPath = path.join(gitRepoPath, relativePath);
+                
+                // Ensure target directory exists
+                const targetDir = path.dirname(targetPath);
+                if (targetDir !== gitRepoPath) {
+                    await mkdir(targetDir, { recursive: true });
+                }
+                
+                // Copy the file
+                if (fs.existsSync(fullSourcePath)) {
+                    await copyFile(fullSourcePath, targetPath);
+                    logSuccess(`Added: ${relativePath} (${file.date})`);
+                } else {
+                    logWarn(`Source file not found: ${fullSourcePath} - creating empty file`);
+                    await writeFile(targetPath, '');
+                }
+                
+                // Set modification time
+                try {
+                    const date = filetimeToDate(file.filetime);
+                    fs.utimesSync(targetPath, date, date);
+                } catch (error) {
+                    logWarn(`Could not set timestamp for ${relativePath}: ${error.message}`);
+                }
+                
+                // Add file to git staging area
+                const escapedTargetPath = escapePath(path.relative(gitRepoPath, targetPath));
+                await execAsync(`git add ${escapedTargetPath}`, { 
+                    cwd: gitRepoPath,
+                    shell: true 
+                });
+                
+            } catch (error) {
+                logError(`Failed to add ${file.filename}: ${error.message}`);
+            }
+        }
+        
+        // Commit this group
+        try {
+            const commitDateObj = new Date(commitDate);
+            const gitDate = dateToGitTimestamp(commitDateObj);
+            const commitMessage = `Reconstructed commit ${commitIndex + 1} - ${commitDateObj.toLocaleDateString()}`;
+            
+            const env = {
+                ...process.env,
+                GIT_AUTHOR_DATE: gitDate,
+                GIT_COMMITTER_DATE: gitDate
+            };
+            
+            const escapedMessage = commitMessage.replace(/"/g, '\\"');
+            await execAsync(`git commit -m "${escapedMessage}"`, { 
+                cwd: gitRepoPath,
+                env: env,
+                shell: true 
+            });
+            
+            logSuccess(`Commit ${commitIndex + 1}/${groupedFiles.length} created`);
+        } catch (error) {
+            logError(`Commit failed: ${error.message}`);
+            // Continue to next commit
+        }
+    }
+    
+    return gitRepoPath;
+}
+
+/**
+ * Main workflow
  */
 async function main() {
-    const options = parseArguments();
+    const options = parseArgs();
     
     if (options.help) {
         showHelp();
         return;
     }
     
-    displayHeader('GIT RECONSTRUCTOR');
+    logHeader('GIT RECONSTRUCTOR');
     
     // Step 1: Select repository
     let repoName = options.repo;
-    
     if (!repoName) {
-        console.log(colors.blue + 'Available repositories in Repos/:' + colors.reset);
-        const repos = await listAvailableRepos();
-        
+        const repos = await listRepos();
         if (repos.length === 0) {
-            console.log(colors.yellow + 'No repositories found in Repos/ directory.' + colors.reset);
+            logError('No repositories found in Repos/ directory.');
             process.exit(1);
         }
         
-        repoName = await selectFromList('Select a repository to reconstruct:', repos, true);
-        
+        repoName = await selectOption('Select repository to reconstruct:', repos);
         if (repoName === null) {
-            console.log(colors.yellow + 'No repository selected. Goodbye!' + colors.reset);
+            logInfo('No repository selected. Goodbye!');
             process.exit(0);
-        }
-        
-        if (repoName === 'CUSTOM') {
-            const readline = require('readline');
-            const rl = readline.createInterface({
-                input: process.stdin,
-                output: process.stdout
-            });
-            
-            const question = colors.bold + '\nEnter custom directory path (relative to project root): ' + colors.reset;
-            process.stdout.write(question);
-            
-            repoName = await new Promise((resolve) => {
-                rl.on('line', (input) => {
-                    rl.close();
-                    resolve(input.trim());
-                });
-            });
-            
-            if (!repoName) {
-                console.log(colors.yellow + 'No directory specified. Goodbye!' + colors.reset);
-                process.exit(0);
-            }
         }
     }
     
     // Step 2: Select approval mode
     let autoApprove = options.autoApprove;
-    
-    if (autoApprove === undefined) {
+    if (!options.autoApprove) {
         autoApprove = await askYesNo('Auto-approve all files (skip manual review)?');
     }
     
-    // Step 3: Set output directory
-    const outputDir = options.outputDir || './reconstructed-repos';
+    // Step 3: Check or create reconstruction JSON
+    const jsonPath = path.join(process.cwd(), `${repoName}-commits.json`);
+    let files = [];
     
-    // Step 4: Run reconstruction
     try {
-        await runReconstruction(repoName, autoApprove, outputDir);
+        const data = await loadReconstructedData(jsonPath);
+        files = data.files;
+        logSuccess(`Loaded existing reconstruction with ${files.length} files`);
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            // Create reconstruction JSON
+            await createReconstructionJson(repoName);
+            const data = await loadReconstructedData(jsonPath);
+            files = data.files;
+        } else {
+            throw error;
+        }
+    }
+    
+    if (files.length === 0) {
+        logError('No files found in reconstruction data.');
+        process.exit(1);
+    }
+    
+    logInfo(`Processing ${files.length} files...`);
+    
+    // Step 4: Create git repository
+    try {
+        const gitRepoPath = await createGitRepository(repoName, files, options.outputDir, autoApprove);
         
-        console.log(colors.green + '\n✓ Reconstruction complete!' + colors.reset);
-        console.log(colors.blue + `\nYour reconstructed git repository is ready at: ./reconstructed-repos/${repoName}` + colors.reset);
-        console.log(colors.blue + '\nYou can explore it with:' + colors.reset);
-        console.log(colors.cyan + `  cd reconstructed-repos/${repoName} && git log --oneline` + colors.reset);
-        console.log(colors.cyan + `  cd reconstructed-repos/${repoName} && git show` + colors.reset);
+        logHeader('RECONSTRUCTION COMPLETE');
+        logSuccess(`Git repository created: ${gitRepoPath}`);
+        logInfo('View your reconstructed repository:');
+        console.log(colors.cyan + `  cd "${gitRepoPath}" && git log --oneline` + colors.reset);
+        console.log(colors.cyan + `  cd "${gitRepoPath}" && git show` + colors.reset);
         
     } catch (error) {
-        console.error(colors.red + `Error: ${error.message}` + colors.reset);
+        logError(`Reconstruction failed: ${error.message}`);
         process.exit(1);
     }
 }
 
-// Run the tool
-main();
-
-// Export for testing
-module.exports = {
-    listAvailableRepos,
-    selectFromList,
-    askYesNo,
-    runReconstruction
-};
+// Run
+main().catch(error => {
+    logError(`Fatal error: ${error.message}`);
+    process.exit(1);
+});
