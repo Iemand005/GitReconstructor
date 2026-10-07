@@ -308,13 +308,13 @@ function parseArguments() {
                 process.exit(1);
             }
             i++;
-        } else if (arg === '--include-hidden' || arg === '-H') {
+        } else if (arg === '--include-hidden' || arg === '-H' || arg.startsWith('--include-hidden=')) {
             options.includeHidden = true;
             i++;
-        } else if (arg === '--all' || arg === '-a') {
+        } else if (arg === '--all' || arg === '-a' || arg.startsWith('--all=')) {
             options.all = true;
             i++;
-        } else if (arg === '--help' || arg === '-h') {
+        } else if (arg === '--help' || arg === '-h' || arg.startsWith('--help=')) {
             options.help = true;
         } else if (arg.startsWith('--')) {
             console.error(`Unknown option: ${arg}`);
