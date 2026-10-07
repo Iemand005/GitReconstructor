@@ -433,11 +433,55 @@ async function createGitRepo(outputDir, repoName) {
 }
 
 /**
+ * Find the common base directory from a list of file paths
+ */
+function getSourceBaseDirectory(files) {
+    if (files.length === 0) return '';
+    
+    // Find the shortest path to use as a reference
+    const paths = files.map(f => f.path);
+    const shortestPath = paths.reduce((a, b) => a.length < b.length ? a : b, paths[0]);
+    
+    // Find common prefix among all paths
+    let commonPrefix = shortestPath;
+    for (const filePath of paths) {
+        while (!filePath.startsWith(commonPrefix)) {
+            commonPrefix = commonPrefix.substring(0, commonPrefix.lastIndexOf(path.sep));
+            if (commonPrefix === '') break;
+        }
+        if (commonPrefix === '') break;
+    }
+    
+    // Remove trailing separators
+    return commonPrefix.replace(/[\\/]+$/, '');
+}
+
+/**
+ * Get relative path from a source base directory
+ * Extracts the path relative to the source directory (e.g., "Repos/Adrian")
+ */
+function getRelativePath(filePath, sourceBaseDir) {
+    // Normalize paths
+    const fullPath = path.normalize(filePath);
+    const baseDir = path.normalize(sourceBaseDir);
+    
+    // Remove the base directory from the path
+    if (fullPath.startsWith(baseDir)) {
+        return fullPath.substring(baseDir.length).replace(/^[\\/]+/, '');
+    }
+    
+    // If it doesn't start with base dir, use just the filename
+    return path.basename(fullPath);
+}
+
+/**
  * Add a file to git repo with specific date
  */
-async function addFileToGitRepo(gitRepoPath, file, sourceFilePath) {
+async function addFileToGitRepo(gitRepoPath, file, sourceFilePath, sourceBaseDir) {
     try {
-        const targetPath = path.join(gitRepoPath, file.filename);
+        // Get relative path from source directory to preserve structure
+        const relativePath = getRelativePath(file.path, sourceBaseDir);
+        const targetPath = path.join(gitRepoPath, relativePath);
         
         // Ensure directory structure exists
         const dir = path.dirname(targetPath);
@@ -465,13 +509,14 @@ async function addFileToGitRepo(gitRepoPath, file, sourceFilePath) {
             // Use Windows-specific approach
             const { utimesSync } = require('fs');
             utimesSync(targetPath, atime, mtime);
-            console.log(colors.green + `✓ Set date for ${file.filename} to ${file.date}` + colors.reset);
+            console.log(colors.green + `✓ Set date for ${relativePath} to ${file.date}` + colors.reset);
         } catch (touchError) {
-            console.log(colors.yellow + `Warning: Could not set exact date for ${file.filename}: ${touchError.message}` + colors.reset);
+            console.log(colors.yellow + `Warning: Could not set exact date for ${relativePath}: ${touchError.message}` + colors.reset);
         }
         
-        // Add file to git
-        await execAsync('git add .', { cwd: gitRepoPath });
+        // Add specific file to git (not just .)
+        const gitRelativePath = relativePath.replace(/\\/g, '/');
+        await execAsync(`git add ${gitRelativePath}`, { cwd: gitRepoPath });
         
         return true;
     } catch (error) {
@@ -561,6 +606,11 @@ async function mainAutoApprove(jsonPath, outputDir) {
         
         console.log(colors.blue + `Creating git repo: ${repoName}` + colors.reset);
         
+        // Determine source base directory from the files
+        // Find the common prefix of all file paths
+        const firstFile = approvedFiles[0];
+        const sourceBaseDir = getSourceBaseDirectory(approvedFiles);
+        
         // Create git repository
         const gitRepoPath = await createGitRepo(finalOutputDir, repoName);
         
@@ -607,10 +657,11 @@ async function mainAutoApprove(jsonPath, outputDir) {
             for (const file of group) {
                 // Find the source file in the original repos directory
                 const sourcePath = path.resolve(path.join(process.cwd(), file.path));
-                const success = await addFileToGitRepo(gitRepoPath, file, sourcePath);
+                const success = await addFileToGitRepo(gitRepoPath, file, sourcePath, sourceBaseDir);
                 
                 if (success) {
-                    console.log(colors.green + `  ✓ Added: ${file.filename} (${file.date})` + colors.reset);
+                    const relativePath = getRelativePath(file.path, sourceBaseDir);
+                    console.log(colors.green + `  ✓ Added: ${relativePath} (${file.date})` + colors.reset);
                 } else {
                     console.log(colors.red + `  ✗ Failed: ${file.filename}` + colors.reset);
                 }
