@@ -91,6 +91,11 @@ function normalizeFilenameForGit(originalFilename, actualFilename) {
         return 'Birthday Counter.html';
     }
     
+    // Specific file mappings for Adrian's repo
+    if (actualFilename === 'selfreliantmonstrousoutliner.adriankusmierek.repl.co.html') {
+        return 'Birthday Counter.html';
+    }
+    
     // Default to original filename
     return originalFilename || actualFilename;
 }
