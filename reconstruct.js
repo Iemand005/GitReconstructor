@@ -86,12 +86,9 @@ function normalizeFilenameForGit(originalFilename, actualFilename) {
     const baseName = path.parse(actualFilename).name;
     const ext = path.parse(actualFilename).ext;
     
-    // Special cases for Adrian's files
-    if (baseName.match(/^index[ea]?$/i)) {
-        return 'index' + ext; // index.html, index.htmla -> index.html, index.htmle -> index.html
-    }
-    if (baseName.match(/^index(wow|Donedenkik|compat)$/i)) {
-        return 'index' + ext; // indexwow.html, indexDonedenkik.html -> index.html
+    // Special cases for Adrian's files - match any index variant
+    if (baseName.match(/^index/)) {  // Anything starting with "index"
+        return 'index' + ext; 
     }
     if (baseName.match(/^Birthday Counter\s*\d*$/i)) {
         return 'Birthday Counter' + ext; // Birthday Counter 2.html -> Birthday Counter.html
@@ -306,6 +303,11 @@ async function createGitRepository(repoName, commits, files, outputDir, autoAppr
                 // Additional normalization for known variant patterns
                 // This ensures that files like index.htmla, index.htmle, indexta.html all become index.html
                 targetFilename = normalizeFilenameForGit(targetFilename, file.filename);
+                
+                // Log the normalization for debugging
+                if (targetFilename !== (file.originalFilename || file.filename)) {
+                    logInfo(`Normalized: ${file.originalFilename || file.filename} -> ${targetFilename}`);
+                }
                 const targetPath = path.join(gitRepoPath, targetFilename);
                 
                 // Copy the file
