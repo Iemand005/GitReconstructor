@@ -102,24 +102,31 @@ function getExtension(filename) {
  * @param {number} threshold - Similarity threshold (0-1)
  * @returns {Array<{name: string, files: string[], count: number}>} - Groups of similar filenames
  */
-function groupSimilarFilenames(filenames, threshold = 0.6) {
+function groupSimilarFilenames(filenames, threshold = 0.6, compareWithoutExtension = false) {
     const groups = [];
     const usedIndices = new Set();
     
     // Sort filenames alphabetically for consistent results
     filenames.sort();
     
+    // Create comparison keys (either full filename or without extension)
+    const comparisonKeys = filenames.map(filename => {
+        return compareWithoutExtension ? getBaseName(filename) : filename;
+    });
+    
     for (let i = 0; i < filenames.length; i++) {
         if (usedIndices.has(i)) continue;
         
         const currentFile = filenames[i];
+        const currentKey = comparisonKeys[i];
         const similarFiles = [currentFile];
         
         // Find all files similar to the current one
         for (let j = i + 1; j < filenames.length; j++) {
             if (usedIndices.has(j)) continue;
             
-            const similarity = stringSimilarity.compareTwoStrings(currentFile, filenames[j]);
+            const comparisonKey = comparisonKeys[j];
+            const similarity = stringSimilarity.compareTwoStrings(currentKey, comparisonKey);
             
             if (similarity >= threshold) {
                 similarFiles.push(filenames[j]);
@@ -131,7 +138,8 @@ function groupSimilarFilenames(filenames, threshold = 0.6) {
             groups.push({
                 name: similarFiles[0], // Use first file as group name
                 files: similarFiles,
-                count: similarFiles.length
+                count: similarFiles.length,
+                key: comparisonKeys[filenames.indexOf(similarFiles[0])]
             });
         }
         
@@ -285,7 +293,8 @@ function parseArguments() {
         threshold: 0.7,
         includeHidden: false,
         all: false,
-        help: false
+        help: false,
+        noExtension: false
     };
     
     let i = 0;
@@ -313,6 +322,9 @@ function parseArguments() {
             i++;
         } else if (arg === '--all' || arg === '-a' || arg.startsWith('--all=')) {
             options.all = true;
+            i++;
+        } else if (arg === '--no-extension' || arg === '-n' || arg.startsWith('--no-extension=')) {
+            options.noExtension = true;
             i++;
         } else if (arg === '--help' || arg === '-h' || arg.startsWith('--help=')) {
             options.help = true;
@@ -349,6 +361,8 @@ Arguments:
 Options:
   -t, --threshold <n>  Similarity threshold (0-1, default: 0.7)
                       Higher = more strict similarity
+  -n, --no-extension   Compare filenames without extensions
+                      (so 'readme.md' and 'readme.txt' will be grouped)
   -H, --include-hidden Include hidden files and directories
   -a, --all            Show all files in the report (not just summary)
   -h, --help           Show this help message
@@ -358,13 +372,19 @@ Examples:
   node similarFilenamesReporter.js .
 
   # Scan with lower similarity threshold
-  node similarFilenamesReporter.js ./src --threshold=0.5
+  node similarFilenamesReporter.js ./src -t 0.5
+
+  # Compare without extensions (group readme.md with readme.txt)
+  node similarFilenamesReporter.js . --no-extension
+
+  # Combine options
+  node similarFilenamesReporter.js ./src -t 0.8 --no-extension
 
   # Include hidden files
-  node similarFilenamesReporter.js . --include-hidden
+  node similarFilenamesReporter.js . -H
 
   # Show all files
-  node similarFilenamesReporter.js ./src --all
+  node similarFilenamesReporter.js ./src -a
 
 How it works:
   - Recursively scans the specified directory
@@ -408,7 +428,7 @@ async function main() {
         const analysis = analyzeFilenamePatterns(files);
         
         // Group similar filenames
-        const similarGroups = groupSimilarFilenames(filenames, options.threshold);
+        const similarGroups = groupSimilarFilenames(filenames, options.threshold, options.noExtension);
         
         // Generate and display report
         const report = formatReport(files, analysis, similarGroups, options.threshold);
