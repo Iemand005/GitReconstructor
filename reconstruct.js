@@ -251,52 +251,14 @@ async function createGitRepository(repoName, commits, files, outputDir, autoAppr
     await execAsync('git config user.email "reconstructor@example.com"', { cwd: gitRepoPath });
     logSuccess(`Git repository initialized at: ${gitRepoPath}`);
     
-    // Determine source base directory
-    const firstPath = files[0]?.path;
-    let sourceBaseDir = '';
-    if (firstPath) {
-        // Extract the Repos/Adrian part from Repos\Adrian\...
-        const parts = firstPath.split(path.sep);
-        sourceBaseDir = path.join(parts[0], parts[1]); // e.g., "Repos/Adrian"
-    }
+    // Use the provided commits structure
+    const commitsToProcess = commits.length > 0 ? commits : [];
     
-    // Use the existing commit structure from the JSON if available
-    let groupedFiles;
-    if (data.commits && data.commits.length > 0) {
-        // Use the existing commit structure
-        groupedFiles = data.commits;
-        logInfo(`Using existing commit structure with ${groupedFiles.length} commits...`);
-    } else {
-        // Fallback to grouping by timestamp proximity (60 seconds = same commit)
-        groupedFiles = [];
-        let currentGroup = [];
-        let lastTimestamp = null;
-        
-        for (const file of files) {
-            const currentTimestamp = new Date(file.date).getTime();
-            
-            if (currentGroup.length === 0) {
-                currentGroup.push(file);
-                lastTimestamp = currentTimestamp;
-            } else if (currentTimestamp - lastTimestamp <= 60000) {
-                currentGroup.push(file);
-                lastTimestamp = currentTimestamp;
-            } else {
-                groupedFiles.push({ files: currentGroup, timestamp: new Date(lastTimestamp).toISOString() });
-                currentGroup = [file];
-                lastTimestamp = currentTimestamp;
-            }
-        }
-        if (currentGroup.length > 0) {
-            groupedFiles.push({ files: currentGroup, timestamp: new Date(lastTimestamp).toISOString() });
-        }
-    }
-    
-    logInfo(`Creating ${groupedFiles.length} commits...`);
+    logInfo(`Creating ${commitsToProcess.length} commits...`);
     
     // Process each commit
-    for (let commitIndex = 0; commitIndex < groupedFiles.length; commitIndex++) {
-        const commit = groupedFiles[commitIndex];
+    for (let commitIndex = 0; commitIndex < commitsToProcess.length; commitIndex++) {
+        const commit = commitsToProcess[commitIndex];
         const group = commit.files || [commit]; // Handle both array and object formats
         const commitDate = commit.timestamp || group[0].date;
         const commitFiletime = commit.filetime || group[0].filetime;
@@ -313,12 +275,6 @@ async function createGitRepository(repoName, commits, files, outputDir, autoAppr
                 const targetFilename = file.originalFilename || file.filename;
                 const targetPath = path.join(gitRepoPath, targetFilename);
                 
-                // Ensure target directory exists
-                const targetDir = path.dirname(targetPath);
-                if (targetDir !== gitRepoPath) {
-                    await mkdir(targetDir, { recursive: true });
-                }
-                
                 // Copy the file
                 if (fs.existsSync(fullSourcePath)) {
                     await copyFile(fullSourcePath, targetPath);
@@ -333,11 +289,11 @@ async function createGitRepository(repoName, commits, files, outputDir, autoAppr
                     const date = filetimeToDate(file.filetime);
                     fs.utimesSync(targetPath, date, date);
                 } catch (error) {
-                    logWarn(`Could not set timestamp for ${relativePath}: ${error.message}`);
+                    logWarn(`Could not set timestamp for ${targetFilename}: ${error.message}`);
                 }
                 
                 // Add file to git staging area
-                const escapedTargetPath = escapePath(path.basename(targetPath));
+                const escapedTargetPath = escapePath(targetFilename);
                 await execAsync(`git add ${escapedTargetPath}`, { 
                     cwd: gitRepoPath,
                     shell: true 
@@ -367,7 +323,7 @@ async function createGitRepository(repoName, commits, files, outputDir, autoAppr
                 shell: true 
             });
             
-            logSuccess(`Commit ${commitIndex + 1}/${groupedFiles.length} created`);
+            logSuccess(`Commit ${commitIndex + 1}/${commitsToProcess.length} created`);
         } catch (error) {
             logError(`Commit failed: ${error.message}`);
             // Continue to next commit
@@ -414,33 +370,33 @@ async function main() {
     
     // Step 3: Check or create reconstruction JSON
     const jsonPath = path.join(process.cwd(), `${repoName}-commits.json`);
-    let files = [];
+    let reconstructionData;
     
     try {
-        const data = await loadReconstructedData(jsonPath);
-        files = data.files;
-        logSuccess(`Loaded existing reconstruction with ${files.length} files`);
+        reconstructionData = await loadReconstructedData(jsonPath);
+        logSuccess(`Loaded existing reconstruction with ${reconstructionData.files.length} files in ${reconstructionData.commits.length} commits`);
     } catch (error) {
         if (error.code === 'ENOENT') {
             // Create reconstruction JSON
             await createReconstructionJson(repoName);
-            const data = await loadReconstructedData(jsonPath);
-            files = data.files;
+            reconstructionData = await loadReconstructedData(jsonPath);
+            logSuccess(`Created and loaded reconstruction with ${reconstructionData.files.length} files in ${reconstructionData.commits.length} commits`);
         } else {
             throw error;
         }
     }
     
-    if ((data.files && data.files.length === 0) && (data.commits && data.commits.length === 0)) {
+    if ((!reconstructionData.files || reconstructionData.files.length === 0) && 
+        (!reconstructionData.commits || reconstructionData.commits.length === 0)) {
         logError('No files found in reconstruction data.');
         process.exit(1);
     }
     
-    logInfo(`Processing ${data.files.length} files in ${data.commits.length} commits...`);
+    logInfo(`Processing ${reconstructionData.files.length} files in ${reconstructionData.commits.length} commits...`);
     
     // Step 4: Create git repository
     try {
-        const gitRepoPath = await createGitRepository(repoName, data.commits, data.files, options.outputDir, autoApprove);
+        const gitRepoPath = await createGitRepository(repoName, reconstructionData.commits, reconstructionData.files, options.outputDir, autoApprove);
         
         logHeader('RECONSTRUCTION COMPLETE');
         logSuccess(`Git repository created: ${gitRepoPath}`);
