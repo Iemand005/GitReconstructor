@@ -2,5 +2,4 @@ Repos
 node_modules
 reconstructed-repos
 blacklist.json
-update_censorship.js
 censor_history.js
