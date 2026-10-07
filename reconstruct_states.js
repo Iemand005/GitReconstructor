@@ -97,9 +97,16 @@ function normalizeFilename(filename) {
  * Extract directory from file path
  */
 function getDirectory(filePath) {
-    const parts = filePath.replace(/\\/g, '/').split('/');
+    const normalizedPath = filePath.replace(/\\/g, '/');
+    const parts = normalizedPath.split('/');
     if (parts.length <= 1) return '.';
-    return parts.slice(0, -1).join('/');
+    const dir = parts.slice(0, -1).join('/');
+    
+    // Clean up directory names for consistency
+    return dir
+        .replace(/^Repos\/Adrian\//, '')  // Remove Repos/Adrian prefix
+        .replace(/\/$/, '')             // Remove trailing slash
+        .replace(/^\//, '');            // Remove leading slash
 }
 
 /**
@@ -163,7 +170,12 @@ function groupFilesByState(reconstructionData) {
  */
 function orderStatesByDate(states) {
     return Object.keys(states)
-        .sort((a, b) => states[a].earliestDate - states[b].earliestDate)
+        .sort((a, b) => {
+            // Final state (with commitIndex 999) should come last
+            if (states[a].commitIndex === 999) return 1;
+            if (states[b].commitIndex === 999) return -1;
+            return states[a].earliestDate - states[b].earliestDate;
+        })
         .map(dir => states[dir]);
 }
 
@@ -180,9 +192,10 @@ function getFinalState(states) {
     
     Object.keys(rootState.files).forEach(filename => {
         const baseName = path.parse(filename).name.toLowerCase();
+        const normalizedFilename = normalizeFilename(filename);
         
         // Keep index.html (and normalize variants)
-        if (baseName.includes('index')) {
+        if (baseName.includes('index') || normalizedFilename === 'index.html') {
             finalFiles['index.html'] = rootState.files[filename];
         }
         // Keep the 4 specific png files
@@ -192,9 +205,20 @@ function getFinalState(states) {
         // Skip renamed copies and other files
     });
     
+    // Use the latest date from among the final files for ordering
+    let latestDate = new Date(0);
+    Object.keys(finalFiles).forEach(filename => {
+        const fileDate = new Date(finalFiles[filename].date);
+        if (fileDate > latestDate) {
+            latestDate = fileDate;
+        }
+    });
+    
     return {
-        ...rootState,
-        files: finalFiles
+        files: finalFiles,
+        earliestDate: latestDate,
+        latestDate: latestDate,
+        commitIndex: 999 // High index to ensure it's processed last
     };
 }
 
