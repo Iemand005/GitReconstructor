@@ -1,0 +1,31 @@
+{
+  "name": "git-reconstructor",
+  "version": "1.0.0",
+  "description": "A Node.js tool for getting file modification dates and other file metadata",
+  "main": "getFileModificationDate.js",
+  "scripts": {
+    "start": "node getFileModificationDate.js",
+    "file-dates": "node getFileModificationDate.js",
+    "help": "node getFileModificationDate.js --help"
+  },
+  "bin": {
+    "file-dates": "./getFileModificationDate.js"
+  },
+  "keywords": [
+    "filesystem",
+    "file",
+    "modification",
+    "date",
+    "metadata",
+    "nodejs"
+  ],
+  "author": "Lasse",
+  "license": "MIT",
+  "dependencies": {
+    "glob": "^10.3.10"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
