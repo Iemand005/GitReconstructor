@@ -77,12 +77,7 @@ function escapePath(p) {
  * This handles cases where gitReconstructor.js didn't properly group variants
  */
 function normalizeFilenameForGit(originalFilename, actualFilename) {
-    // If the original filename is already clean, use it
-    if (originalFilename && !actualFilename.match(/[ea]html$|t$|wow$|Donedenkik$|compat$/i)) {
-        return originalFilename;
-    }
-    
-    // Handle index variants
+    // Handle index variants - match any index variant
     const baseName = path.parse(actualFilename).name;
     const ext = path.parse(actualFilename).ext;
     
