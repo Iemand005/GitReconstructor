@@ -353,10 +353,23 @@ async function createGitRepository(repoName, commits, files, outputDir, autoAppr
                 let targetFilename = normalizeFilenameForGit(file.originalFilename || file.filename, file.filename, file.path);
                 const targetPath = path.join(gitRepoPath, targetFilename);
                 
-                // Copy the file
+                // Copy the file with censorship applied
                 if (fs.existsSync(fullSourcePath)) {
-                    await copyFile(fullSourcePath, targetPath);
-                    logSuccess(`Added: ${targetFilename} (${file.date})`);
+                    try {
+                        // Read the file content
+                        const fileContent = await fs.promises.readFile(fullSourcePath, 'utf8');
+                        
+                        // Apply censorship
+                        const censoredContent = applyCensorship(fileContent, blacklist);
+                        
+                        // Write the censored content
+                        await writeFile(targetPath, censoredContent);
+                        logSuccess(`Added: ${targetFilename} (${file.date})`);
+                    } catch (readError) {
+                        // If reading as text fails (binary file), fall back to direct copy
+                        await copyFile(fullSourcePath, targetPath);
+                        logSuccess(`Added: ${targetFilename} (${file.date}) - binary`);
+                    }
                 } else {
                     logWarn(`Source file not found: ${fullSourcePath} - creating empty file`);
                     await writeFile(targetPath, '');
